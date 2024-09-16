@@ -1,23 +1,41 @@
 #!/bin/bash
 
-set -xe
+set -e
 
-CONFLICTING_PACKAGES=docker.io \
-		docker-doc \
-		docker-compose \
-		docker-compose-v2 \
-		podman-docker \
-		containerd \
-		runc
+CONFLICTING_PACKAGES=(
+	docker.io
+	docker-doc
+	docker-compose
+	docker-compose-v2
+	podman-docker
+	containerd
+	runc
+)
 
-PRE_REQUIRE_PACKAGES=apt-transport-https \
-			ca-certificates \
-			curl \
-			gpg \
-			wget \
-			socat \
-			conntrack \
-			firewalld
+PRE_REQUIRE_PACKAGES=(
+	apt-transport-https
+	ca-certificates
+	curl
+	gpg
+	wget
+	socat
+	conntrack
+	firewalld
+)
+
+CONTAINER_PACKAGES=(
+	docker-ce
+	docker-ce-cli
+	containerd.io
+	docker-buildx-plugin
+	docker-compose-plugin
+)
+
+K8S_PACKAGES=(
+	kubelet
+	kubeadm
+	kubectl
+)
 
 KUBERNETES_APT_PACKAGE_STRING='deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /'
 DOCKER_APT_PACKAGE_STRING="deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable"
@@ -25,16 +43,10 @@ DOCKER_APT_PACKAGE_STRING="deb [arch=$(dpkg --print-architecture) signed-by=/etc
 K8S_RELEASE_KEY_URL='https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key'
 DOCKER_GPG_URL='https://download.docker.com/linux/ubuntu/gpg'
 
-CONTAINER_PACKAGES=docker-ce \
-		docker-ce-cli \
-		containerd.io \
-		docker-buildx-plugin \
-		docker-compose-plugin
-
 # Prepare packages
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo apt-get update -y
-sudo apt-get install -y $PRE_REQUIRE_PACKAGES
+sudo apt-get install -y $PRE_REQUIRE_PACKAGES[@]
 
 # Set keyrings for docker
 sudo curl -fsSL "$DOCKER_GPG_URL" -o /etc/apt/keyrings/docker.asc
@@ -54,7 +66,7 @@ for pkg in $CONFLICTING_PACKAGES; do
 done
 
 # Installed default required packages
-sudo apt-get install -y $CONTAINER_PACKAGES
+sudo apt-get install -y $CONTAINER_PACKAGES[@]
 
 # Deactivate swap for the machine for k8s functionality
 sudo swapoff -a
@@ -74,8 +86,8 @@ echo "net.ipv4.ip_forward = 1" | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 
 # Install kube(*)
-sudo apt-get install -y kubelet kubeadm kubectl
-sudo apt-mark hold kubelet kubeadm kubectl
+sudo apt-get install -y $K8S_PACKAGES[@]
+sudo apt-mark hold $K8S_PACKAGES[@]
 
 # Enable the services
 sudo systemctl enable --now containerd
