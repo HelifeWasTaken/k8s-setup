@@ -109,6 +109,8 @@ sudo apt-get install -y "${K8S_PACKAGES[@]}" && sudo apt-mark hold "${K8S_PACKAG
 # Enable the services
 for service in "${SYSTEM_SERVICES_TO_START[@]}"; do sudo systemctl enable --now "$service" ; done
 
+sleep 5 # Ensure services are enabled and running
+
 # Init kubeadm and copies it's configuration
 sudo kubeadm init
 
