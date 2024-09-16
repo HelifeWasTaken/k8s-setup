@@ -5,7 +5,7 @@ set -e
 UBUNTU_VERSION_CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
 ARCH="$(dpkg --print-architecture)"
 SWAP_DISK="$(sudo systemctl --type swap --plain --legend=no | cut -d ' ' -f 1)"
-FIREWALL_CMD="$(which ufw || which firewall-cmd || which iptables)"
+FIREWALL_CMD="$(basename "$(which ufw || which firewall-cmd || which iptables)")"
 
 CONFLICTING_PACKAGES=(
 	docker.io
