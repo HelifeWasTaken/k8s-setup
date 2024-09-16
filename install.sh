@@ -2,6 +2,10 @@
 
 set -e
 
+UBUNTU_VERSION_CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
+ARCH="$(dpkg --print-architecture)"
+SWAP_DISK="$(sudo systemctl --type swap --plain --legend=no | cut -d ' ' -f 1)"
+
 CONFLICTING_PACKAGES=(
 	docker.io
 	docker-doc
@@ -37,16 +41,26 @@ K8S_PACKAGES=(
 	kubectl
 )
 
+FIREWALL_PORTS_TO_ALLOW_PERMANENTLY=(
+	6443/tcp
+ 	10250/tcp
+)
+
+SYSTEM_SERVICES_TO_START=(
+	containerd
+ 	kubelet
+  	docker
+)
+
 KUBERNETES_APT_PACKAGE_STRING='deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /'
-DOCKER_APT_PACKAGE_STRING="deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable"
+DOCKER_APT_PACKAGE_STRING="deb [arch=$ARCH signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $UBUNTU_VERSION_CODENAME stable"
 
 K8S_RELEASE_KEY_URL='https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key'
 DOCKER_GPG_URL='https://download.docker.com/linux/ubuntu/gpg'
 
 # Prepare packages
 sudo install -m 0755 -d /etc/apt/keyrings
-sudo apt-get update -y
-sudo apt-get install -y $PRE_REQUIRE_PACKAGES[@]
+sudo apt-get update -y && sudo apt-get install -y "${PRE_REQUIRE_PACKAGES[@]}"
 
 # Set keyrings for docker
 sudo curl -fsSL "$DOCKER_GPG_URL" -o /etc/apt/keyrings/docker.asc
@@ -57,27 +71,18 @@ echo "$DOCKER_APT_PACKAGE_STRING" | sudo tee /etc/apt/sources.list.d/docker.list
 curl -fsSL "$K8S_RELEASE_KEY_URL"     | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 echo "$KUBERNETES_APT_PACKAGE_STRING" | sudo tee /etc/apt/sources.list.d/kubernetes.list
 
-# Update the package list
-sudo apt update -y && sudo apt-get update -y
-
-# remove possible conflicting packages
-for pkg in $CONFLICTING_PACKAGES; do
-	sudo apt-get remove $pkg || echo -ne "" # do not fail in case -x is set
-done
+# remove conflicting packages and update the package list
+sudo apt-get remove "${CONFLICTING_PACKAGES[@]}" -y && sudo apt update -y && sudo apt-get update -y
 
 # Installed default required packages
-sudo apt-get install -y $CONTAINER_PACKAGES[@]
+sudo apt-get install -y "${CONTAINER_PACKAGES[@]}"
 
 # Deactivate swap for the machine for k8s functionality
 sudo swapoff -a
-swaps="$(sudo systemctl --type swap --plain --legend=no | xargs -n1 grep ".swap")"
-for swap in $swaps; do
-        sudo systemctl mask "$swap"
-done
+for swap in "${SWAP_DISKS[@]}"; do sudo systemctl mask "$swap" ; done
 
 # Set ports for kubelet kubeadm and kubectl
-sudo firewall-cmd --add-port=6443/tcp --permanent
-sudo firewall-cmd --add-port=10250/tcp --permanent
+for port in "${FIREWALL_PORTS_TO_ALLOW_PERMANENTLY[@]}"; do sudo firewall-cmd --add-port=$port --permanent ; done
 sudo firewall-cmd --reload
 
 # Enable ip forwarding
@@ -86,13 +91,10 @@ echo "net.ipv4.ip_forward = 1" | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 
 # Install kube(*)
-sudo apt-get install -y $K8S_PACKAGES[@]
-sudo apt-mark hold $K8S_PACKAGES[@]
+sudo apt-get install -y "${K8S_PACKAGES[@]}" && sudo apt-mark hold "${K8S_PACKAGES[@]}"
 
 # Enable the services
-sudo systemctl enable --now containerd
-sudo systemctl enable --now kubelet
-sudo systemctl enable --now docker
+for service in "${SYSTEM_SERVICES_TO_START[@]}"; do sudo systemctl enable --now "$service" ; done
 
 # Init kubeadm and copies it's configuration
 sudo kubeadm init
