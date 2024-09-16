@@ -108,8 +108,14 @@ sudo apt-get install -y "${K8S_PACKAGES[@]}" && sudo apt-mark hold "${K8S_PACKAG
 
 # Enable the services
 for service in "${SYSTEM_SERVICES_TO_START[@]}"; do sudo systemctl enable --now "$service" ; done
+sleep 2 # Ensure services are enabled and running
 
-sleep 5 # Ensure services are enabled and running
+# Ensure that CRI Runtime plugin is not disabled
+if [ -f "/etc/containerd/config.toml" ]; then
+	sudo sed -E '/disabled_plugins/ s/,\s*"(cri-[^"]*)"\s*//g; /disabled_plugins/ s/\["(cri-[^"]*)",\s*//g' "/etc/containerd/config.toml" 		
+else
+	sudo echo 'disabled_plugins = []' > /etc/containerd/config.toml
+fi
 
 # Init kubeadm and copies it's configuration
 sudo kubeadm init
