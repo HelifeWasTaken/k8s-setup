@@ -5,6 +5,7 @@ set -e
 UBUNTU_VERSION_CODENAME="$(. /etc/os-release && echo "$VERSION_CODENAME")"
 ARCH="$(dpkg --print-architecture)"
 SWAP_DISK="$(sudo systemctl --type swap --plain --legend=no | cut -d ' ' -f 1)"
+FIREWALL_CMD="$(which ufw || which firewall-cmd || which iptables)"
 
 CONFLICTING_PACKAGES=(
 	docker.io
@@ -82,8 +83,20 @@ sudo swapoff -a
 for swap in "${SWAP_DISKS[@]}"; do sudo systemctl mask "$swap" ; done
 
 # Set ports for kubelet kubeadm and kubectl
-for port in "${FIREWALL_PORTS_TO_ALLOW_PERMANENTLY[@]}"; do sudo firewall-cmd --add-port=$port --permanent ; done
-sudo firewall-cmd --reload
+if [ -z "${FIREWALL_CMD}" ]; then
+	echo "[INFO] Using ${FIREWALL_CMD} as the firewall if you think there is an error please change the firewall manually"
+ 	if [ "${FIREWALL_CMD}" = "firewall-cmd" ]; then
+		for port in "${FIREWALL_PORTS_TO_ALLOW_PERMANENTLY[@]}"; do sudo firewall-cmd --add-port="${port}" --permanent ; done
+		sudo firewall-cmd --reload
+  	elif [ "${FIREWALL_CMD}" = "ufw" ]; then
+		for port in "${FIREWALL_PORTS_TO_ALLOW_PERMANENTLY[@]}"; do sudo ufw allow "${port}" ; done
+     	elif [ "${FIREWALL_CMD}" = "iptables" ]; then
+		for port in "${FIREWALL_PORTS_TO_ALLOW_PERMANENTLY[@]}"; do sudo iptables -A INPUT -p "${port##*/}" --dport "${port%%/*}" -j ACCEPT ; done
+  		sudo iptables-save > /etc/iptables/rules.v4
+      	fi
+else
+	echo "[WARNING] Could not find a suitable firewall please update the rules with thoses permanently manually: ${FIREWALL_PORTS_TO_ALLOW_PERMANENTLY[@]}" 1>&2
+fi
 
 # Enable ip forwarding
 sudo sysctl -w net.ipv4.ip_forward=1
