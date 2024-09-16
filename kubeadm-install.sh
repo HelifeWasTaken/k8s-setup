@@ -1,4 +1,14 @@
-#!/bin/bash -xe
+#!/bin/bash
+
+set -xe
+
+cd "$(dirname $0)"
+
+./check-prerequisities.sh ""
+
+if [ $? -ne 0 ]; then
+	exit 1
+fi
 
 #Install kubelet & kubeadm
 
@@ -40,4 +50,26 @@ sudo chmod +x kubeadm kubelet
 curl -sSL "${KUBELET_TEMPLATE_SERVICE_URL}" | sed "s:/usr/bin:${DOWNLOAD_DIR}:g" | sudo tee "$KUBELET_SERVICE_PATH"
 curl -sSL "${KUBEADM_TEMPLATE_CONF_URL}"    | sed "s:/usr/bin:${DOWNLOAD_DIR}:g" | sudo tee "$KUBEADM_CONF_PATH"
 
+sudo firewall-cmd --add-port=6443/tcp --permanent
+sudo firewall-cmd --add-port=10250/tcp --permanent
+sudo firewall-cmd --reload
+
+# Deactivate swap on the machine permanently
+sudo swapoff -a
+swaps="$(sudo systemctl --type swap --plain --legend=no | xargs -n1 grep ".swap")"
+for swap in $swaps; do
+	sudo systemctl mask "$swap"
+done
+
+sudo sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward = 1" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
 sudo systemctl enable --now kubelet
+sudo systemctl enable --now containerd
+
+echo "You may require to reboot your computer before kubeadm (use now init-kubeadm.sh)"
+
+#kubeadm join 192.168.1.26:6443 --token 9v8mgl.d4ei0qvu6qwddlhf \
+#	        --discovery-token-ca-cert-hash sha256:aa4e6555d80be599ccc7c567c2cbbca111115cd98a80ff8cd27cd61df7b28f20
+

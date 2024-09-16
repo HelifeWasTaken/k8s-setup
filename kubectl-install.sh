@@ -1,4 +1,13 @@
-#!/bin/bash -xe
+#!/bin/bash
+
+set -xe
+cd "$(dirname $0)"
+
+./check-prerequisities.sh ""
+
+if [ $? -ne 0 ]; then
+	exit 1
+fi
 
 HOSTNAME="https://dl.k8s.io"
 ARCH=$(./get_arch.sh)
