@@ -1,6 +1,22 @@
 #!/bin/bash
 
-set -xe
+if [ "$EUID" != 0 ]; then
+        echo "Please run as root" 1>&2
+        exit 1
+fi
+
+if [ -z "$NETWORK_INTERFACE" ]; then
+	NETWORK_INTERFACE=eth0
+fi
+
+set -e
+
+NETWORK_INTERFACE_IP="$(ifconfig $NETWORK_INTERFACE | perl -nle '/(\d+\.\d+\.\d+\.\d+)/ && print $1')"
+
+if [ -z "$NETWORK_INTERFACE_IP" ]; then
+	echo "Cloud not get the network interface IP for $NETWORK_INTERFACE"
+	exit 1
+fi
 
 CONFLICTING_PACKAGES=docker.io \
 		docker-doc \
@@ -17,7 +33,9 @@ PRE_REQUIRE_PACKAGES=apt-transport-https \
 			wget \
 			socat \
 			conntrack \
-			firewalld
+			firewalld \
+			croup-tools \
+			'libcgroup*'
 
 KUBERNETES_APT_PACKAGE_STRING='deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /'
 DOCKER_APT_PACKAGE_STRING="deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable"
@@ -32,61 +50,77 @@ CONTAINER_PACKAGES=docker-ce \
 		docker-compose-plugin
 
 # Prepare packages
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo apt-get update -y
-sudo apt-get install -y $PRE_REQUIRE_PACKAGES
+install -m 0755 -d /etc/apt/keyrings
+apt-get update -y
+apt-get install -y $PRE_REQUIRE_PACKAGES
 
 # Set keyrings for docker
-sudo curl -fsSL "$DOCKER_GPG_URL" -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-echo "$DOCKER_APT_PACKAGE_STRING" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+curl -fsSL "$DOCKER_GPG_URL" -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+echo "$DOCKER_APT_PACKAGE_STRING" | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
 # Set keyrings for k8s
-curl -fsSL "$K8S_RELEASE_KEY_URL"     | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo "$KUBERNETES_APT_PACKAGE_STRING" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+curl -fsSL "$K8S_RELEASE_KEY_URL"     | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+echo "$KUBERNETES_APT_PACKAGE_STRING" | tee /etc/apt/sources.list.d/kubernetes.list
 
 # Update the package list
-sudo apt update -y && sudo apt-get update -y
+apt update -y && apt-get update -y
 
 # remove possible conflicting packages
 for pkg in $CONFLICTING_PACKAGES; do
-	sudo apt-get remove $pkg || echo -ne "" # do not fail in case -x is set
+	apt-get remove $pkg || echo -ne "" # do not fail in case -x is set
 done
 
 # Installed default required packages
-sudo apt-get install -y $CONTAINER_PACKAGES
+apt-get install -y $CONTAINER_PACKAGES
 
 # Deactivate swap for the machine for k8s functionality
-sudo swapoff -a
-swaps="$(sudo systemctl --type swap --plain --legend=no | xargs -n1 grep ".swap")"
+swapoff -a
+swaps="$(systemctl --type swap --plain --legend=no | xargs -n1 grep ".swap")"
 for swap in $swaps; do
-        sudo systemctl mask "$swap"
+        systemctl mask "$swap"
 done
 
 # Set ports for kubelet kubeadm and kubectl
-sudo firewall-cmd --add-port=6443/tcp --permanent
-sudo firewall-cmd --add-port=10250/tcp --permanent
-sudo firewall-cmd --reload
+firewall-cmd --add-port=6443/tcp --permanent
+firewall-cmd --add-port=10250/tcp --permanent
+firewall-cmd --reload
 
 # Enable ip forwarding
-sudo sysctl -w net.ipv4.ip_forward=1
-echo "net.ipv4.ip_forward = 1" | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
+sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward = 1" | tee -a /etc/sysctl.conf
+sysctl -p
 
 # Install kube(*)
-sudo apt-get install -y kubelet kubeadm kubectl
-sudo apt-mark hold kubelet kubeadm kubectl
+apt-get install -y kubelet kubeadm kubectl 
+apt-mark hold kubelet kubeadm kubectl
 
 # Enable the services
-sudo systemctl enable --now containerd
-sudo systemctl enable --now kubelet
-sudo systemctl enable --now docker
+systemctl enable --now containerd
+systemctl enable --now kubelet
+systemctl enable --now docker
 
 # Init kubeadm and copies it's configuration
-sudo kubeadm init
+cat /etc/containerd/config.toml | sed 's/disabled_plugins = \["cri"\]/disabled_plugins = []/g' > /etc/containerd/config.toml
+#If kubeadm complains of missing hugetlb cgroups
+#To /etc/default/grub change GRUB_CMD_LINUX_DEFAULT
+#GRUB_CMDLINE_LINUX_DEFAULT="cgroup_enable=hugetlb"
+#If it is an issue with cri check the disabled_plugins maybe it is not disabled properly
+kubeadm init || (echo "Check troubleshooting with the kubeadm init comments inside the script"; exit 1)
 
+# Update the home configuration
 if [ ! -z "$HOME" ]; then
 	mkdir -p "$HOME/.kube"
-	sudo cp -i "/etc/kubernetes/admin.conf" "$HOME/.kube/config"
-	sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
+	cp "/etc/kubernetes/admin.conf" "$HOME/.kube/config"
+	chown "$(id -u):$(id -g)" "$HOME/.kube/config"
 fi
+
+# Install helm for 'packages'
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Install flanneld for networking
+kubectl create ns kube-flannel
+kubectl label --overwrite ns kube-flannel pod-security.kubernetes.io/enforce=privileged
+
+helm repo add flannel https://flannel-io.github.io/flannel/
+helm install flannel --set podCidr="10.244.0.0/16" --namespace kube-flannel flannel/flannel
